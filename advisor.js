@@ -2,7 +2,24 @@ const chatContainer = document.getElementById('chat-container');
 const replyInput = document.getElementById('reply-input');
 const sendBtn = document.getElementById('send-btn');
 
-// Translation Dictionaries (Full logic for demo)
+// Firebase Configuration (PRO)
+const firebaseConfig = {
+  apiKey: "AIzaSyC0n24ottjUNnentg1aCgQSdfQHHpZJEuo",
+  authDomain: "corpotrading-chat.firebaseapp.com",
+  projectId: "corpotrading-chat",
+  storageBucket: "corpotrading-chat.firebasestorage.app",
+  messagingSenderId: "162943016451",
+  appId: "1:162943016451:web:d1227a4992c99e27a17836",
+  databaseURL: "https://corpotrading-chat-default-rtdb.firebaseio.com"
+};
+
+// Initialize Firebase
+if (typeof firebase !== 'undefined') {
+    firebase.initializeApp(firebaseConfig);
+    var db = firebase.database();
+}
+
+// Translation Dictionaries
 const dictionary = {
     toES: {
         en: { "Hello": "Hola", "Logistics": "Logística", "I need help": "Necesito ayuda", "Shipping": "Envío" },
@@ -16,7 +33,6 @@ const dictionary = {
 
 function translateToSpanish(text, fromLang) {
     if (fromLang === 'es') return text;
-    // Simple heuristic for demo; in production use API
     const map = dictionary.toES[fromLang] || {};
     let trans = text;
     Object.keys(map).forEach(key => {
@@ -55,49 +71,44 @@ function addMessage(text, role, lang = 'es') {
     chatContainer.scrollTop = chatContainer.scrollHeight;
 }
 
-function loadChats() {
-    const raw = localStorage.getItem('corpotrading_chats');
-    if (raw) {
-        const chats = JSON.parse(raw);
-        chatContainer.innerHTML = '';
-        chats.forEach(m => addMessage(m.text, m.role, m.lang));
-    }
+let lastUserLang = 'en';
+
+// Firebase Real-time Listener
+if (typeof db !== 'undefined') {
+    db.ref('chats').on('child_added', (snapshot) => {
+        const msg = snapshot.val();
+        if (msg.role === 'user') {
+            lastUserLang = msg.lang || 'en';
+            addMessage(msg.text, 'user', lastUserLang);
+        } else if (msg.role === 'advisor') {
+            // Already added locally if sent from here, but helps sync other advisor windows
+            if (!document.querySelector(`[data-id="${snapshot.key}"]`)) {
+                addMessage(msg.text, 'advisor');
+            }
+        }
+    });
 }
 
 function sendMessage() {
     const text = replyInput.value.trim();
-    if (!text) return;
+    if (!text || typeof db === 'undefined') return;
 
-    // 1. Get current chats
-    const raw = localStorage.getItem('corpotrading_chats') || '[]';
-    const chats = JSON.parse(raw);
+    // 1. Translate for user
+    const translatedText = translateFromSpanish(text, lastUserLang);
+
+    // 2. Push to Firebase
+    db.ref('chats').push({
+        text: translatedText,
+        role: 'advisor',
+        lang: lastUserLang,
+        displayES: text,
+        timestamp: Date.now()
+    });
     
-    // 2. Identify target language from last user message
-    const lastUserMsg = [...chats].reverse().find(m => m.role === 'user');
-    const targetLang = lastUserMsg ? lastUserMsg.lang : 'en';
-
-    // 3. Translate for user
-    const translatedText = translateFromSpanish(text, targetLang);
-
-    // 4. Update local storage
-    const newMsg = { text: translatedText, role: 'advisor', lang: targetLang, displayES: text };
-    chats.push(newMsg);
-    localStorage.setItem('corpotrading_chats', JSON.stringify(chats));
-    
-    // 5. Update UI
+    // 3. Update UI locally for speed
     addMessage(text, 'advisor');
     replyInput.value = '';
 }
 
 sendBtn.onclick = sendMessage;
 replyInput.onkeypress = (e) => { if(e.key === 'Enter') sendMessage(); };
-
-// Sync Listener
-window.addEventListener('storage', (e) => {
-    if (e.key === 'corpotrading_chats') {
-        loadChats();
-    }
-});
-
-// Initial Load
-loadChats();
