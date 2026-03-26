@@ -20,22 +20,23 @@ if (typeof firebase !== 'undefined') {
 }
 
 /**
- * PRO Machine Translation using Public API
+ * PRO Machine Translation using MyMemory API (Free & CORS-Friendly)
  */
 async function translateText(text, from, to) {
     if (from === to) return text;
     try {
-        const url = `https://translate.googleapis.com/translate_a/single?client=gtx&sl=${from}&tl=${to}&dt=t&q=${encodeURIComponent(text)}`;
+        const langPair = `${from}|${to}`;
+        const url = `https://api.mymemory.translated.net/get?q=${encodeURIComponent(text)}&langpair=${langPair}`;
         const response = await fetch(url);
         const data = await response.json();
-        return data[0][0][0]; 
+        return data.responseData.translatedText || text;
     } catch (e) {
         console.error("Translation fail:", e);
-        return text; // Fallback to original
+        return text; 
     }
 }
 
-async function addMessage(text, role, lang = 'es') {
+async function addMessage(text, role, lang = 'es', displayES = "") {
     const emptyMsg = document.querySelector('.empty');
     if (emptyMsg) emptyMsg.remove();
 
@@ -46,6 +47,9 @@ async function addMessage(text, role, lang = 'es') {
     if (role === 'user') {
         const translated = await translateText(text, lang, 'es');
         content = `<span class="msg-lang">Original (${lang}): ${text}</span>${translated}`;
+    } else if (role === 'advisor') {
+        // En el panel del asesor, mostramos lo que el asesor escribió en ESPAÑOL
+        content = displayES || text;
     }
 
     div.innerHTML = content;
@@ -63,10 +67,10 @@ if (typeof db !== 'undefined') {
             lastUserLang = msg.lang || 'en';
             addMessage(msg.text, 'user', lastUserLang);
         } else if (msg.role === 'advisor') {
-            // Already added locally if sent from here, but syncs other advisor tabs
-            // We use a simple check to not duplicate
-            const exist = Array.from(document.querySelectorAll('.msg-advisor')).some(m => m.innerText.includes(msg.displayES));
-            if (!exist) addMessage(msg.displayES || msg.text, 'advisor');
+            // Check if already displayed
+            const textToMatch = msg.displayES || msg.text;
+            const exist = Array.from(document.querySelectorAll('.msg-advisor')).some(m => m.innerText.includes(textToMatch));
+            if (!exist) addMessage(msg.text, 'advisor', 'es', msg.displayES);
         }
     });
 }
@@ -75,7 +79,11 @@ async function sendMessage() {
     const text = replyInput.value.trim();
     if (!text || typeof db === 'undefined') return;
 
-    // 1. Translate for user (Real-time PRO)
+    // UI Feedback (Instant)
+    addMessage(text, 'advisor');
+    replyInput.value = '';
+
+    // 1. Translate for user (PRO)
     const translatedText = await translateText(text, 'es', lastUserLang);
 
     // 2. Push to Firebase
@@ -86,10 +94,6 @@ async function sendMessage() {
         displayES: text,
         timestamp: Date.now()
     });
-    
-    // 3. Update UI locally
-    addMessage(text, 'advisor');
-    replyInput.value = '';
 }
 
 sendBtn.onclick = sendMessage;
