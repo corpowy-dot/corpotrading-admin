@@ -1,0 +1,16 @@
+{
+  "name": "CORPOTRADING Advisor",
+  "short_name": "Asesor",
+  "description": "Portal de Asesoría Real-time para CORPOTRADING",
+  "start_url": "advisor.html",
+  "display": "standalone",
+  "background_color": "#0a192f",
+  "theme_color": "#00e5ff",
+  "icons": [
+    {
+      "src": "pwa-icon.png",
+      "sizes": "512x512",
+      "type": "image/png"
+    }
+  ]
+}
