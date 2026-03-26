@@ -25,26 +25,36 @@ let lastUserLang = 'en';
 const activeListeners = {}; 
 
 /**
- * PRO Machine Translation using MyMemory API
+ * PRO Machine Translation (Async Fallback)
  */
 async function translateText(text, from, to) {
     if (from === to || !text) return text;
     try {
         const url = `https://api.mymemory.translated.net/get?q=${encodeURIComponent(text)}&langpair=${from}|${to}`;
-        const response = await fetch(url);
+        const controller = new AbortController();
+        const id = setTimeout(() => controller.abort(), 3000); // 3s Timeout
+        const response = await fetch(url, { signal: controller.signal });
+        clearTimeout(id);
         const data = await response.json();
         return data.responseData.translatedText || text;
     } catch (e) { return text; }
 }
 
-async function addMessage(text, role, lang = 'es', displayES = "") {
+async function addMessage(text, role, lang = 'es', displayES = "", msgId = null) {
     const div = document.createElement('div');
     div.className = `msg msg-${role}`;
+    if (msgId) div.id = `m-${msgId}`;
     
     let content = text;
     if (role === 'user') {
-        const translated = await translateText(text, lang, 'es');
-        content = `<span class="msg-lang">Original (${lang}): ${text}</span><span class="msg-trans">${translated}</span>`;
+        // Placeholder until translation arrives
+        content = `<span class="msg-lang">Original (${lang}): ${text}</span><span class="msg-trans">Traduciendo...</span>`;
+        
+        // Background Translation
+        translateText(text, lang, 'es').then(trans => {
+            const transNode = div.querySelector('.msg-trans');
+            if (transNode) transNode.innerText = trans;
+        });
     } else if (role === 'advisor') {
         content = displayES || text;
     }
@@ -60,88 +70,86 @@ async function addMessage(text, role, lang = 'es', displayES = "") {
 function switchSession(sid) {
     if (currentSessionId === sid) return;
     
-    // UI Update
     currentSessionId = sid;
     chatContainer.innerHTML = '';
     const tab = document.querySelector(`[data-sid="${sid}"]`);
     if (tab) {
-        tab.classList.remove('notified'); // Clear notification
+        tab.classList.remove('notified');
         tab.classList.add('active');
+        tab.style.boxShadow = 'none';
+        tab.style.borderColor = 'var(--primary)';
     }
     document.querySelectorAll('.session-tab').forEach(t => {
         if (t.dataset.sid !== sid) t.classList.remove('active');
     });
 
-    // Attach listener if not already attached
-    if (!activeListeners[sid]) {
-        db.ref(`chats/${sid}/messages`).on('child_added', (snapshot) => {
-            const msg = snapshot.val();
-            handleIncomingMessage(sid, msg);
+    // Reload history for this session
+    db.ref(`chats/${sid}/messages`).once('value', (snapshot) => {
+        snapshot.forEach(child => {
+            const m = child.val();
+            if (m.role === 'user') addMessage(m.text, 'user', m.lang, "", child.key);
+            else addMessage(m.text, 'advisor', 'es', m.displayES, child.key);
         });
-        activeListeners[sid] = true;
-    } else {
-        // Reload history
-        db.ref(`chats/${sid}/messages`).once('value', (snapshot) => {
-            snapshot.forEach(child => {
-                const m = child.val();
-                if (m.role === 'user') addMessage(m.text, 'user', m.lang);
-                else addMessage(m.text, 'advisor', 'es', m.displayES);
-            });
-        });
-    }
+    });
 }
 
-function handleIncomingMessage(sid, msg) {
+function handleIncomingMessage(sid, msg, msgId) {
+    // 1. SOUND ALERT (Always if role is user)
+    if (msg.role === 'user' && typeof playNotification === 'function') {
+        playNotification();
+    }
+
+    // 2. UI UPDATE
     if (currentSessionId === sid) {
+        // Check for duplicates
+        if (document.getElementById(`m-${msgId}`)) return;
+
         if (msg.role === 'user') {
             lastUserLang = msg.lang || 'en';
-            addMessage(msg.text, 'user', lastUserLang);
-            if (typeof playNotification === 'function') playNotification();
+            addMessage(msg.text, 'user', lastUserLang, "", msgId);
         } else if (msg.role === 'advisor') {
-            addMessage(msg.text, 'advisor', 'es', msg.displayES);
+            addMessage(msg.text, 'advisor', 'es', msg.displayES, msgId);
         }
     } else {
-        // Notification for background session
+        // High-vis notification for background session
         const tab = document.querySelector(`[data-sid="${sid}"]`);
         if (tab && msg.role === 'user') {
             tab.classList.add('notified');
-            if (typeof playNotification === 'function') playNotification();
         }
     }
 }
 
 /**
- * Listen for all sessions
+ * Global Listeners
  */
 if (typeof db !== 'undefined') {
+    // Listen for new sessions
     db.ref('chats').on('child_added', (snapshot) => {
         const sid = snapshot.key;
-        
-        // Remove empty state if exists
-        const empty = sessionSelector.querySelector('.empty');
-        if (empty) empty.remove();
-
-        // Create Tab
         if (!document.querySelector(`[data-sid="${sid}"]`)) {
+            const empty = sessionSelector.querySelector('.empty');
+            if (empty) empty.remove();
+
             const tab = document.createElement('div');
             tab.className = 'session-tab';
             tab.dataset.sid = sid;
-            tab.innerText = `ID: ${sid.substr(-5)}`; 
+            tab.innerText = `Chat: ${sid.substr(-4)}`; 
             tab.onclick = () => switchSession(sid);
             sessionSelector.appendChild(tab);
 
-            // Auto-switch if first session
             if (!currentSessionId) switchSession(sid);
         }
         
-        // Watch for messages even if not active session yet
+        // Always attach message listener to NEW session
         if (!activeListeners[sid]) {
-            db.ref(`chats/${sid}/messages`).on('child_added', (sn) => {
-                handleIncomingMessage(sid, sn.val());
+            db.ref(`chats/${sid}/messages`).on('child_added', (msgSnap) => {
+                handleIncomingMessage(sid, msgSnap.val(), msgSnap.key);
             });
             activeListeners[sid] = true;
         }
     });
+
+    // Handle existing sessions on reload (already handled by child_added in Firebase)
 }
 
 async function sendMessage() {
