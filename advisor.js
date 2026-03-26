@@ -19,41 +19,23 @@ if (typeof firebase !== 'undefined') {
     var db = firebase.database();
 }
 
-// Translation Dictionaries
-const dictionary = {
-    toES: {
-        en: { "Hello": "Hola", "Logistics": "Logística", "I need help": "Necesito ayuda", "Shipping": "Envío" },
-        zh: { "你好": "Hola", "物流": "Logística", "帮助": "Necesito ayuda", "航运": "Envío" }
-    },
-    fromES: {
-        en: { "Hola": "Hello", "Logística": "Logistics", "En qué puedo ayudar": "How can I help", "Entendido": "Understood" },
-        zh: { "Hola": "你好", "Logística": "物流", "En qué puedo ayudar": "我可以如何帮您", "Entendido": "明白了" }
+/**
+ * PRO Machine Translation using Public API
+ */
+async function translateText(text, from, to) {
+    if (from === to) return text;
+    try {
+        const url = `https://translate.googleapis.com/translate_a/single?client=gtx&sl=${from}&tl=${to}&dt=t&q=${encodeURIComponent(text)}`;
+        const response = await fetch(url);
+        const data = await response.json();
+        return data[0][0][0]; 
+    } catch (e) {
+        console.error("Translation fail:", e);
+        return text; // Fallback to original
     }
-};
-
-function translateToSpanish(text, fromLang) {
-    if (fromLang === 'es') return text;
-    const map = dictionary.toES[fromLang] || {};
-    let trans = text;
-    Object.keys(map).forEach(key => {
-        const regex = new RegExp(key, 'gi');
-        trans = trans.replace(regex, map[key]);
-    });
-    return trans;
 }
 
-function translateFromSpanish(text, toLang) {
-    if (toLang === 'es') return text;
-    const map = dictionary.fromES[toLang] || {};
-    let trans = text;
-    Object.keys(map).forEach(key => {
-        const regex = new RegExp(key, 'gi');
-        trans = trans.replace(regex, map[key]);
-    });
-    return trans;
-}
-
-function addMessage(text, role, lang = 'es') {
+async function addMessage(text, role, lang = 'es') {
     const emptyMsg = document.querySelector('.empty');
     if (emptyMsg) emptyMsg.remove();
 
@@ -62,7 +44,7 @@ function addMessage(text, role, lang = 'es') {
     
     let content = text;
     if (role === 'user') {
-        const translated = translateToSpanish(text, lang);
+        const translated = await translateText(text, lang, 'es');
         content = `<span class="msg-lang">Original (${lang}): ${text}</span>${translated}`;
     }
 
@@ -81,20 +63,20 @@ if (typeof db !== 'undefined') {
             lastUserLang = msg.lang || 'en';
             addMessage(msg.text, 'user', lastUserLang);
         } else if (msg.role === 'advisor') {
-            // Already added locally if sent from here, but helps sync other advisor windows
-            if (!document.querySelector(`[data-id="${snapshot.key}"]`)) {
-                addMessage(msg.text, 'advisor');
-            }
+            // Already added locally if sent from here, but syncs other advisor tabs
+            // We use a simple check to not duplicate
+            const exist = Array.from(document.querySelectorAll('.msg-advisor')).some(m => m.innerText.includes(msg.displayES));
+            if (!exist) addMessage(msg.displayES || msg.text, 'advisor');
         }
     });
 }
 
-function sendMessage() {
+async function sendMessage() {
     const text = replyInput.value.trim();
     if (!text || typeof db === 'undefined') return;
 
-    // 1. Translate for user
-    const translatedText = translateFromSpanish(text, lastUserLang);
+    // 1. Translate for user (Real-time PRO)
+    const translatedText = await translateText(text, 'es', lastUserLang);
 
     // 2. Push to Firebase
     db.ref('chats').push({
@@ -105,7 +87,7 @@ function sendMessage() {
         timestamp: Date.now()
     });
     
-    // 3. Update UI locally for speed
+    // 3. Update UI locally
     addMessage(text, 'advisor');
     replyInput.value = '';
 }
